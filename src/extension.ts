@@ -1,3 +1,5 @@
+// This code written with the following philosophy: "Worse is better"
+
 import * as vscode from "vscode"
 import { getApi } from "./api"
 
@@ -167,7 +169,7 @@ const Scopes: { [index: string]: Scope } = {
               },
               ...this.focus.Parameters.map((param: any) => ({
                 label: `$(${iconFromType(param.Type.Name)}) ${param.Name}`,
-                detail: param.Type.Name,
+                description: param.Type.Name,
               })),
             ]
           : []),
