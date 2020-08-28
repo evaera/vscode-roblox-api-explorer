@@ -161,6 +161,12 @@ const Scopes: { [index: string]: Scope } = {
             )
           },
         },
+        {
+          label: "$(clippy) Copy Name to Clipboard",
+          trigger: () => {
+            vscode.env.clipboard.writeText(this.focus.Name)
+          },
+        },
         getInputItem(this.focus, true),
         ...(this.focus.Parameters
           ? [
