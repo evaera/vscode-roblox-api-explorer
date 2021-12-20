@@ -3,7 +3,7 @@
 	"displayName": "Roblox API Explorer",
 	"description": "Allows you to explore the Roblox API right from your IDE",
 	"repository": "https://github.com/evaera/vscode-roblox-api-explorer",
-	"version": "1.1.0",
+	"version": "1.2.0",
 	"publisher": "evaera",
 	"engines": {
 		"vscode": "^1.43.0"
