@@ -1,54 +1,154 @@
 import fetch from "node-fetch"
-import * as xml2js from "xml2js"
 
 const CURRENT_VERSION_URL =
   "https://clientsettings.roblox.com/v1/client-version/WindowsStudio"
 const API_DUMP_URL =
   "https://s3.amazonaws.com/setup.roblox.com/{version}-API-Dump.json"
-const REFLECTION_METADATA_URL =
-  "https://raw.githubusercontent.com/CloneTrooper1019/Roblox-Client-Tracker/roblox/ReflectionMetadata.xml"
+const API_DOCS_URL =
+  "https://raw.githubusercontent.com/MaximumADHD/Roblox-Client-Tracker/roblox/api-docs/en-us.json"
 
 async function getJson(url: string) {
   return fetch(url).then((r) => r.json())
 }
 
-async function injectDescriptions(classes: Array<any>) {
-  const rmd = await xml2js.parseStringPromise(
-    await fetch(REFLECTION_METADATA_URL).then((r) => r.text())
-  )
+function stripHtml(str?: string) {
+  if (str == null) return
+  return str.replace(/<[^>]*>?/gm, "")
+}
 
-  for (const classEntry of classes) {
-    const entry = rmd.roblox.Item.find(
-      (i: any) => i.$.class === "ReflectionMetadataClasses"
-    ).Item.find((i: any) =>
-      i.Properties[0].string.find(
-        (p: any) => p.$.name === "Name" && p._ === classEntry.Name
-      )
-    )
+function convertDocsFunction(name: string, entry: any, tag?: string) {
+  if (entry.overloads) {
+    const ty = Object.keys(entry.overloads)[0]
 
-    const summary = entry?.Properties[0].string.find(
-      (s: any) => s.$.name === "summary"
-    )?._
+    const match = ty.match(/^\((.*)\) -> (\w+)$/)
+    if (match) {
+      const params = match[1].split(",")
 
-    if (entry && entry.Item) {
-      const items = Object.fromEntries(
-        entry.Item.flatMap((i: any) => i.Item)
-          .filter((i: any) => i && i.Properties !== undefined)
-          .map((i: any) => [
-            i.Properties[0].string.find((s: any) => s.$.name === "Name")?._,
-            i.Properties[0].string.find((s: any) => s.$.name === "summary")?._,
-          ])
-          .filter((entry: any) => entry.length === 2)
-      )
+      entry.params = params.map((paramType, i) => ({
+        name: `Parameter ${i}`,
+        type: paramType,
+      }))
 
-      for (const member of classEntry.Members) {
-        if (items[member.Name]) {
-          member.__summary = items[member.Name]
+      entry.returns = [
+        {
+          name: match[2] || "undocumented",
+        },
+      ]
+    } else {
+      entry.params = []
+      entry.returns = []
+    }
+  }
+
+  return {
+    MemberType: "Function",
+    Name: name,
+    Parameters: entry.params.map((param: any) => ({
+      Name: param.name,
+      Type: {
+        Category: "Unknown",
+        Name: param.type || "undocumented",
+      },
+    })),
+    ReturnType: {
+      Category: "Unknown",
+      Name:
+        entry.returns.length === 1
+          ? entry.returns[0].name
+          : entry.returns.length > 1
+          ? `${entry.returns.length} values`
+          : "undocumented",
+    },
+    Tags: tag ? [tag] : [],
+    __summary: stripHtml(entry.documentation),
+    __link: entry.learn_more_link,
+  }
+}
+
+function extractFromDocs(docs: any) {
+  const globals = []
+  const dataTypes = []
+
+  for (let key in docs) {
+    if (key.includes(".")) continue // optimization
+
+    const match = key.match(/^(?:@roblox|@luau)\/global\/(\w+)$/)
+
+    if (match) {
+      const name = match[1]
+      const entry = docs[key]
+
+      if (entry.params || entry.returns) {
+        globals.push(convertDocsFunction(name, entry, "Global"))
+      } else if (entry.keys) {
+        const members: any[] = Object.entries(entry.keys).map(
+          ([memberName, memberKey]: [any, any]) => {
+            const memberEntry = docs[memberKey]
+
+            return convertDocsFunction(memberName, memberEntry, "Constructor")
+          }
+        )
+
+        const globalType = docs[`@roblox/globaltype/${name}`]
+
+        if (globalType) {
+          members.push(
+            ...Object.entries(globalType.keys).map(
+              ([memberName, memberKey]: [any, any]) => {
+                const memberEntry = docs[memberKey]
+
+                if (memberEntry.params || memberEntry.returns) {
+                  return convertDocsFunction(memberName, memberEntry)
+                } else {
+                  return {
+                    MemberType: "Property",
+                    Name: memberName,
+                    __summary: stripHtml(memberEntry.documentation),
+                    ValueType: {
+                      Category: "Unknown",
+                      Name: "",
+                    },
+                    Tags: [],
+                    __link: entry.learn_more_link,
+                  }
+                }
+              }
+            )
+          )
         }
+
+        const isLibrary =
+          entry.learn_more_link && entry.learn_more_link.includes("lua-docs") // lol
+
+        dataTypes.push({
+          Name: name,
+          Members: members,
+          __summary: stripHtml(entry.documentation),
+          Tags: [isLibrary ? "Library" : "DataType"],
+          __inheritedMembers: [],
+          __link: entry.learn_more_link,
+        })
       }
     }
+  }
 
-    classEntry.__summary = summary
+  return { dataTypes, globals }
+}
+
+async function injectDescriptions(classes: Array<any>, docs: any) {
+  for (const classEntry of classes) {
+    for (const member of classEntry.Members) {
+      const entry = docs[`@roblox/globaltype/${classEntry.Name}.${member.Name}`]
+
+      if (entry) {
+        member.__summary = stripHtml(entry.documentation)
+      }
+    }
+    const entry = docs[`@roblox/globaltype/${classEntry.Name}`]
+
+    if (entry) {
+      classEntry.__summary = stripHtml(entry.documentation)
+    }
   }
 }
 
@@ -119,7 +219,9 @@ async function getApiAsync() {
     API_DUMP_URL.replace("{version}", currentVersionId)
   )
 
-  await injectDescriptions(dump.Classes).catch(console.error)
+  const docs = await getJson(API_DOCS_URL)
+
+  injectDescriptions(dump.Classes, docs)
 
   for (const classEntry of dump.Classes) {
     classEntry.__inheritedMembers = getInheritedMembers(
@@ -136,6 +238,8 @@ async function getApiAsync() {
 
   console.log(`${dump.Classes.length} classes`)
 
+  const { dataTypes, globals } = extractFromDocs(docs)
+
   return [
     ...dump.Classes,
     ...dump.Enums.map((item: any) => ({
@@ -148,6 +252,8 @@ async function getApiAsync() {
       Tags: ["Enum"],
       __inheritedMembers: [],
     })),
+    ...dataTypes,
+    ...globals,
   ]
 }
 

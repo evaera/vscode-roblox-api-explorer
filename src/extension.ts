@@ -10,9 +10,11 @@ const memberTypeIcons: { [index: string]: string } = {
 }
 
 const tagIcons: { [index: string]: string } = {
-  Service: "database",
+  Service: "symbol-misc",
   Enum: "symbol-enum",
   EnumItem: "symbol-enum-member",
+  DataType: "symbol-interface",
+  Library: "symbol-module",
 }
 
 function getIcon(member: any) {
@@ -126,41 +128,58 @@ const Scopes: { [index: string]: Scope } = {
         {
           label: "$(discard) Back",
           trigger(state: State) {
-            state.scope = Scopes.instance
+            if (Scopes.instance.focus) {
+              state.scope = Scopes.instance
+            } else {
+              state.scope = Scopes.list
+            }
           },
         },
-        {
-          label: "$(link-external) Open DevHub Documentation",
-          trigger: () => {
-            vscode.env.openExternal(
-              vscode.Uri.parse(
-                "https://developer.roblox.com/en-us/api-reference/" +
-                  (this.focus.MemberType
-                    ? `${this.focus.MemberType.toLowerCase()}/${
-                        this.focus.of
-                      }/${this.focus.Name}`
-                    : `${this.focus.Tags.includes("Enum") ? "enum" : "class"}/${
-                        this.focus.Name
-                      }`)
-              )
-            )
-          },
-        },
-        {
-          label: "$(link-external) Open Roblox API Reference",
-          trigger: () => {
-            vscode.env.openExternal(
-              vscode.Uri.parse(
-                `https://robloxapi.github.io/ref/${
-                  this.focus.Tags.includes("Enum") ? "enum" : "class"
-                }/` +
-                  (this.focus.MemberType
-                    ? `${this.focus.of}#member-${this.focus.Name}`
-                    : `/${this.focus.Name}`)
-              )
-            )
-          },
-        },
+        ...(this.focus.__link
+          ? [
+              {
+                label: "$(link-external) Open DevHub Documentation",
+                trigger: () => {
+                  vscode.env.openExternal(vscode.Uri.parse(this.focus.__link))
+                },
+              },
+            ]
+          : [
+              {
+                label: "$(link-external) Open DevHub Documentation",
+                trigger: () => {
+                  vscode.env.openExternal(
+                    vscode.Uri.parse(
+                      "https://developer.roblox.com/en-us/api-reference/" +
+                        (this.focus.MemberType
+                          ? `${this.focus.MemberType.toLowerCase()}/${
+                              this.focus.of
+                            }/${this.focus.Name}`
+                          : `${
+                              this.focus.Tags.includes("Enum")
+                                ? "enum"
+                                : "class"
+                            }/${this.focus.Name}`)
+                    )
+                  )
+                },
+              },
+              {
+                label: "$(link-external) Open Roblox API Reference",
+                trigger: () => {
+                  vscode.env.openExternal(
+                    vscode.Uri.parse(
+                      `https://robloxapi.github.io/ref/${
+                        this.focus.Tags.includes("Enum") ? "enum" : "class"
+                      }/` +
+                        (this.focus.MemberType
+                          ? `${this.focus.of}#member-${this.focus.Name}`
+                          : `/${this.focus.Name}`)
+                    )
+                  )
+                },
+              },
+            ]),
         {
           label: "$(clippy) Copy Name to Clipboard",
           trigger: () => {
@@ -220,6 +239,7 @@ const Scopes: { [index: string]: Scope } = {
         {
           label: "$(discard) Back",
           trigger(state: State) {
+            Scopes.instance.focus = undefined
             state.scope = Scopes.list
           },
         },
@@ -255,13 +275,24 @@ const Scopes: { [index: string]: Scope } = {
           state.saved.filter === "enums"
             ? member.Tags.includes("Enum")
             : state.saved.filter === "classes"
-            ? !member.Tags.includes("Enum")
+            ? member.MemoryCategory === "Instances"
+            : state.saved.filter === "datatypes"
+            ? member.Tags.includes("DataType")
+            : state.saved.filter === "libraries"
+            ? member.Tags.includes("Library")
+            : state.saved.filter === "globals"
+            ? member.Tags.includes("Global")
             : true
         )
         .filter(stateAwareFilter(state))
         .map((member: any) => ({
           ...getInputItem(member, false, (state: State) => {
-            state.scope = Scopes.instance
+            if (member.MemberType) {
+              state.scope = Scopes.detail
+            } else {
+              state.scope = Scopes.instance
+            }
+
             state.scope.focus = member
           }),
         }))
@@ -335,10 +366,13 @@ function reifyScope(
           all: "filter",
           classes: "symbol-class",
           enums: "symbol-enum",
+          libraries: "symbol-module",
+          datatypes: "symbol-interface",
+          globals: "symbol-function",
         }[on]),
       (on) => `Change filtered view (Currently ${on})`,
       save,
-      ["all", "enums", "classes"]
+      ["all", "enums", "classes", "libraries", "datatypes", "globals"]
     ),
     createToggleButton(
       state,
@@ -385,7 +419,7 @@ interface SavedState {
   robloxSecurity: boolean
   pluginSecurity: boolean
   resume: boolean
-  filter: "enums" | "classes" | "all"
+  filter: "enums" | "classes" | "all" | "datatypes" | "libraries" | "globals"
 }
 interface State {
   api: any
